@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react"
 import Quill from "quill"
 import "quill/dist/quill.snow.css"
 import { io } from "socket.io-client"
+import { useParams } from "react-router-dom"
 
+const SAVE_INTERVAL_MS = 2000
 const TOOLBAR_OPTIONS = [
   [{ header: [1, 2, 3, 4, 5, 6, false] }],
   [{ font: [] }],
@@ -16,62 +18,80 @@ const TOOLBAR_OPTIONS = [
 ]
 
 export default function TextEditor() {
-  // so we can access our socket & quill anywhere
   const [socket, setSocket] = useState()
   const [quill, setQuill] = useState()
+  const { id: documentId } = useParams()    // useParams() returns an id obj (renamed it)
 
-  // client side socket.io connecting to server side socket.io
+  // client side socket.io connecting to server side socket.io once
   useEffect(() => {
     const s = io("http://localhost:3001")   // server's port
     setSocket(s)
 
-    // cleanup (disconnect)
     return () => {
       s.disconnect()
     }
   }, [])
 
+  // set each socket.io users into their own room based on their url id, bc even when 2 users are on diff doc urls, they both still sync up
+  useEffect(() => {
+    if (socket == null || quill == null) return
 
-  // for detecting any quill changes (updating our doc upon receiving changes)
+    // once: automatically cleans up this event after listening to it once unlike .on
+    // after sending the doc to server, we'll receive it back here & load the doc
+    socket.once("load-document", document => {
+      quill.setContents(document)
+      quill.enable()  // bc we disabled the text editor til the doc is loaded (wrapperRef)
+    })
+
+    socket.emit(`get-document`, documentId)       // sends the url id to server 
+  }, [socket, quill, documentId])
+
+  // saving the entire document (data) to server
+  useEffect(() => {
+    if (socket == null || quill == null) return
+
+    // quill.getContents gets the doc data we need to save to our db every 2s
+    const interval = setInterval(() => {    
+      socket.emit("save-document", quill.getContents()) 
+    }, SAVE_INTERVAL_MS)
+
+    return () => {
+      clearInterval(interval)
+    }
+  }, [socket, quill])
+
+  // for updating our doc after receiving changes from the server
   useEffect(() => {
     if (socket == null || quill == null) return 
 
-    // setting up an event listener to update our doc to the changes passed by the client
     const handler = (delta) => {
       quill.updateContents(delta)
     }
-    socket.on("receive-changes", handler)
+    socket.on("receive-changes", handler)   // event we set up on the server side
 
     return () => {
       socket.off("receive-changes", handler)
     }
   }, [socket, quill])  
 
-
-  // for detecting any quill changes (sending changes)
+  // for sending changes to the server
   useEffect(() => {
-    // when we first run this useEffect socket & quill will be undefined (dependencies)
     if (socket == null || quill == null) return
 
     // text-change event & 3 parameters comes from quill
     const handler = (delta, oldDelta, source) => {
-      // source determines who made the changes (we only care about the user changes)
-      if (source !== "user") return
+      if (source !== "user") return      // we only care about the changes the user make
 
-      // the delta is the only thing actually changing not the whole document
-      socket.emit("send-changes", delta)
+      socket.emit("send-changes", delta)  // delta is when the user types
     }
-
     quill.on("text-change", handler)
 
-    // cleanup
     return () => {
       quill.off("text-change", handler)
     }
-  }, [socket, quill])             // dependencies
+  }, [socket, quill])   // dependencies
 
-
-  // create a new instance of quill but only once on page render
+  // setup quill. create a new instance but only once on page render
   const wrapperRef = useCallback((wrapper) => {
     if (wrapper == null) return
 
@@ -79,6 +99,8 @@ export default function TextEditor() {
     const editor = document.createElement("div")
     wrapper.append(editor)
     const q = new Quill(editor, { theme: "snow", modules: { toolbar: TOOLBAR_OPTIONS } })
+    q.disable()  // disable text editor til our own private doc is loaded (2nd useEffect)
+    q.setText("Loading...")
     setQuill(q)
   }, [])
 

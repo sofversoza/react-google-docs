@@ -34,7 +34,7 @@ body {
   box-shadow: 0 0 5px 0 rgba(0, 0, 0, 0.5);
 }
 
-/* to dictate on the actual page when you print it */
+/* to dictate on the actual page you print */
 @page {
   margin: 1in;
 }
